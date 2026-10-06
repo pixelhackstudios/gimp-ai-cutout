@@ -1,0 +1,8 @@
+[Unit]
+Description=AI Cutout for GIMP: server socket
+
+[Socket]
+ListenStream=127.0.0.1:41879
+
+[Install]
+WantedBy=sockets.target

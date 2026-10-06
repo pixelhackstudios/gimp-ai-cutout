@@ -1,0 +1,10 @@
+[Unit]
+Description=AI Cutout for GIMP: background removal server (BiRefNet, ViTMatte, SAM 2)
+Requires=gimp-ai-cutout.socket
+After=gimp-ai-cutout.socket
+
+[Service]
+Type=simple
+ExecStart=%h/.local/share/gimp-ai-cutout/venv/bin/ai-cutout-server --idle-timeout 600
+Environment=HF_HUB_OFFLINE=1 PYTHONUNBUFFERED=1
+Nice=5

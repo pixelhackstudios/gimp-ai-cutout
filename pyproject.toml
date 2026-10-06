@@ -1,0 +1,30 @@
+[build-system]
+requires = ["setuptools>=77"]
+build-backend = "setuptools.build_meta"
+
+[project]
+name = "gimp-ai-cutout-server"
+version = "1.0.0"
+description = "Local background-removal server (BiRefNet + ViTMatte + SAM 2) for the GIMP AI Cutout plug-in"
+requires-python = ">=3.10"
+license = "MIT"
+dependencies = [
+    "torch>=2.6",
+    "torchvision",
+    "transformers>=5.0,<6",
+    "huggingface_hub",
+    "safetensors",
+    "timm",
+    "kornia",
+    "einops",
+    "opencv-python-headless",
+    "numpy",
+    "pillow",
+]
+
+[project.scripts]
+ai-cutout = "cutout_server.cli:main"
+ai-cutout-server = "cutout_server.server:main"
+
+[tool.setuptools.packages.find]
+where = ["src"]
