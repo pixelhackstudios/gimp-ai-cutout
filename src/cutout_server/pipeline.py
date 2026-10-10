@@ -180,6 +180,11 @@ class Pipeline:
     def sam_has(self, session_id):
         return session_id in self._sessions
 
+    def release_gpu_cache(self):
+        """Hand cached but unused GPU memory back, so image generation (a separate process) can use it."""
+        if self.device.type == "cuda":
+            torch.cuda.empty_cache()
+
     def sam_close(self, session_id):
         self._sessions.pop(session_id, None)
         if self.device.type == "cuda":

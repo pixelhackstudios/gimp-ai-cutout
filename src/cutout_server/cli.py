@@ -3,7 +3,7 @@
     ai-cutout photo.jpg cutout.png
     ai-cutout photo.jpg cutout.png --decontaminate --save-trimap trimap.png
     ai-cutout photo.jpg dog.png --point 420,310 --exclude 600,200
-    ai-cutout --download-models
+    ai-cutout --download-models [--with-generation]
 """
 
 import argparse
@@ -54,11 +54,13 @@ def main(argv=None):
     ap.add_argument("--save-trimap", metavar="PATH")
     ap.add_argument("--device", help="cuda, cuda:1, cpu (default: cuda if available)")
     ap.add_argument("--download-models", action="store_true", help="fetch the pinned checkpoints and exit")
+    ap.add_argument("--with-generation", action="store_true",
+                    help="with --download-models: also fetch the Z-Image-Turbo generation models (about 6.7 GB)")
     args = ap.parse_args(argv)
 
     if args.download_models:
         from .models import fetch_all
-        fetch_all()
+        fetch_all(generation=args.with_generation)
         return
     if not args.input or not args.output:
         ap.error("input and output are required")

@@ -4,6 +4,7 @@ Revisions are pinned so a change upstream (including BiRefNet's remote code) can
 never alter what runs on this machine without an explicit update here.
 """
 
+import os
 import threading
 
 import torch
@@ -17,6 +18,17 @@ SAM = ("facebook/sam2.1-hiera-large", "665f8e2ad61cf5f53d65644ff27c8ee525124610"
 
 ALL = (SEGMENTATION, MATTING, SAM)
 
+# Image generation: Z-Image-Turbo (Apache-2.0), run by stable-diffusion.cpp. Each
+# spec names exactly one file, so fetch_file() can return its path.
+GEN_DIFFUSION = ("leejet/Z-Image-Turbo-GGUF", "c61c0e422dc8b541b7548cf33a4ef8302b0f8085",
+                 ["z_image_turbo-Q4_K.gguf"])
+GEN_TEXT_ENCODER = ("unsloth/Qwen3-4B-Instruct-2507-GGUF", "a06e946bb6b655725eafa393f4a9745d460374c9",
+                    ["Qwen3-4B-Instruct-2507-Q4_K_M.gguf"])
+GEN_VAE = ("Comfy-Org/z_image_turbo", "6fc90a3b1b653e935a0d175e260736de25b84df5",
+           ["split_files/vae/ae.safetensors"])
+
+GENERATION = (GEN_DIFFUSION, GEN_TEXT_ENCODER, GEN_VAE)
+
 
 def fetch(spec):
     """Return the local snapshot path for a pinned checkpoint, downloading it if needed."""
@@ -26,8 +38,12 @@ def fetch(spec):
     return snapshot_download(repo, revision=revision, allow_patterns=patterns)
 
 
-def fetch_all():
-    for spec in ALL:
+def fetch_file(spec):
+    return os.path.join(fetch(spec), spec[2][0])
+
+
+def fetch_all(generation=False):
+    for spec in ALL + (GENERATION if generation else ()):
         print(f"{spec[0]} @ {spec[1][:10]}: {fetch(spec)}", flush=True)
 
 

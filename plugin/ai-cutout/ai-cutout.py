@@ -2,7 +2,8 @@
 """AI Cutout for GIMP 3.
 
 Remove backgrounds, select subjects, select objects by clicking them, and refine
-mask or selection edges using BiRefNet, ViTMatte and SAM 2.
+mask or selection edges using BiRefNet, ViTMatte and SAM 2; generate images from
+a description with Z-Image-Turbo.
 
 The networks run in a separate local server (ai-cutout-server, started on demand
 by systemd); this plug-in only moves pixels, so it needs nothing beyond the
@@ -18,6 +19,7 @@ import math
 import os
 import sys
 import threading
+import time
 import urllib.error
 import urllib.request
 
@@ -37,6 +39,8 @@ PROC_OBJECT = 'python-fu-ai-cutout-select-object'
 PROC_REFINE_SEL = 'python-fu-ai-cutout-refine-selection'
 PROC_REFINE_MASK = 'python-fu-ai-cutout-refine-mask'
 PROC_GUIDE = 'python-fu-ai-cutout-guide'
+PROC_GENERATE = 'python-fu-ai-cutout-generate'
+GENERATE_TIMEOUT = 3600   # a picture takes ~25 s on a GPU but minutes without one
 
 
 class CutoutError(Exception):
@@ -57,7 +61,8 @@ def request(path, params, body=b'', timeout=600):
             message = json.loads(e.read()).get('error', str(e))
         except Exception:
             message = str(e)
-        raise CutoutError('AI Cutout server error: ' + message)
+        # 400s are things the user can fix ("Describe the picture..."); show them as they are.
+        raise CutoutError(message if e.code == 400 else 'AI Cutout ran into a problem: ' + message)
     except (urllib.error.URLError, OSError) as e:
         raise CutoutError("AI Cutout's engine isn't running, so nothing was changed.\n\n"
                           'Open AI > How to Use AI Cutout to check it, or start it from a '
@@ -73,10 +78,16 @@ def engine_status():
         return False, ("The AI engine isn't running. Re-run AI Cutout's install.sh, or start "
                        'it from a terminal with:\n' + START_HINT)
     where = 'graphics card' if info.get('device', '').startswith('cuda') else 'processor (slower)'
-    return True, 'The AI engine is ready, running on your {}.'.format(where)
+    generation = {
+        'gpu': 'Image generation is ready.',
+        'cpu': 'Image generation is installed, but without a usable graphics card each picture '
+               'takes several minutes.',
+    }.get(info.get('generation'), "Image generation isn't installed. Run AI Cutout's installer "
+                                  'again to add it.')
+    return True, 'The AI engine is ready, running on your {}. {}'.format(where, generation)
 
 
-def request_with_progress(text, path, params, body=b''):
+def request_with_progress(text, path, params, body=b'', timeout=600):
     """Run a request on a worker thread while pulsing GIMP's progress bar.
 
     The first request after the server starts also loads the networks onto the
@@ -86,7 +97,7 @@ def request_with_progress(text, path, params, body=b''):
 
     def work():
         try:
-            result['value'] = request(path, params, body)
+            result['value'] = request(path, params, body, timeout)
         except Exception as e:
             result['error'] = e
 
@@ -549,6 +560,281 @@ def select_object(procedure, run_mode, image, layer, config):
     return True
 
 
+# -- image generation -----------------------------------------------------------
+
+# Picture shapes offered when generating: (id, label, width, height). "fit" matches
+# the selection or canvas and is cropped to fill it exactly.
+SHAPES = [
+    ('fit', 'Fit {}', None, None),
+    ('square', 'Square (1024 × 1024)', 1024, 1024),
+    ('portrait', 'Portrait (832 × 1216)', 832, 1216),
+    ('landscape', 'Landscape (1216 × 832)', 1216, 832),
+    ('wide', 'Widescreen (1344 × 768)', 1344, 768),
+]
+
+
+def target_area(image):
+    """(x, y, w, h, description) the generated picture should fill, or None without an image."""
+    if image is None:
+        return None
+    _, non_empty, x1, y1, x2, y2 = Gimp.Selection.bounds(image)
+    if non_empty:
+        return x1, y1, x2 - x1, y2 - y1, 'selection'
+    return 0, 0, image.get_width(), image.get_height(), 'canvas'
+
+
+def generation_size(shape, target):
+    """Pixel size to generate: about one megapixel, in multiples of 64."""
+    for shape_id, _, width, height in SHAPES:
+        if shape_id == shape and width:
+            return width, height
+    if target is None:
+        return 1024, 1024
+    aspect = min(max(target[2] / target[3], 0.25), 4.0)
+    height = math.sqrt(1024 * 1024 / aspect)
+    snap = lambda v: min(max(int(round(v / 64)) * 64, 256), 2048)
+    return snap(height * aspect), snap(height)
+
+
+def place_generated(image, drawables, rgb, width, height, prompt, shape):
+    """Add a generated picture as a new layer filling the selection or canvas.
+
+    Without an image, it becomes a new image, which is returned."""
+    name = 'AI: ' + (prompt if len(prompt) <= 40 else prompt[:39] + '…')
+    if image is None:
+        image = Gimp.Image.new(width, height, Gimp.ImageBaseType.RGB)
+        layer = Gimp.Layer.new(image, name, width, height, Gimp.ImageType.RGB_IMAGE, 100,
+                               Gimp.LayerMode.NORMAL)
+        image.insert_layer(layer, None, 0)
+        write(layer, (0, 0, width, height), "R'G'B' u8", rgb)
+        return image
+
+    layer_type = (Gimp.ImageType.GRAYA_IMAGE if image.get_base_type() == Gimp.ImageBaseType.GRAY
+                  else Gimp.ImageType.RGBA_IMAGE)
+    tx, ty, tw, th, _ = target_area(image)
+    parent, position = None, 0
+    if drawables:
+        current = drawables[0]
+        if isinstance(current, Gimp.LayerMask):
+            current = Gimp.Layer.from_mask(current)
+        if isinstance(current, Gimp.Layer):
+            parent, position = current.get_parent(), image.get_item_position(current)
+
+    image.undo_group_start()
+    try:
+        layer = Gimp.Layer.new(image, name, width, height, layer_type, 100, Gimp.LayerMode.NORMAL)
+        image.insert_layer(layer, parent, position)
+        write(layer, (0, 0, width, height), "R'G'B' u8", rgb)
+        if shape == 'fit':
+            # Scale to cover the area, then crop the overflow equally on both sides.
+            scale = max(tw / width, th / height)
+            sw, sh = max(1, round(width * scale)), max(1, round(height * scale))
+            layer.scale(sw, sh, False)
+            layer.resize(tw, th, -((sw - tw) // 2), -((sh - th) // 2))
+            layer.set_offsets(tx, ty)
+        else:
+            layer.set_offsets(tx + (tw - width) // 2, ty + (th - height) // 2)
+    finally:
+        image.undo_group_end()
+    image.set_selected_layers([layer])
+    return image
+
+
+class GenerateDialog:
+    """Prompt box, shape and seed, a preview of each result, and Generate as often as you like."""
+
+    RESPONSE_GENERATE = 1
+    PREVIEW = 320  # keeps the dialog under ~700 px tall for laptop screens
+
+    def __init__(self, config, target):
+        gi.require_version('GimpUi', '3.0')
+        gi.require_version('Gtk', '3.0')
+        gi.require_version('GdkPixbuf', '2.0')
+        from gi.repository import GimpUi, Gtk, GdkPixbuf
+        self.Gtk, self.GdkPixbuf = Gtk, GdkPixbuf
+        GimpUi.init(PROC_GENERATE)
+
+        self.config, self.target = config, target
+        self.result = None
+        self.busy = False
+        self.closed = False
+
+        use_header_bar = Gtk.Settings.get_default().get_property('gtk-dialogs-use-header')
+        self.dialog = GimpUi.Dialog(use_header_bar=use_header_bar, title='Generate Image',
+                                    role='ai-cutout-generate')
+        GimpUi.window_set_transient(self.dialog)
+        self.dialog.add_button('_Close', Gtk.ResponseType.CANCEL)
+        self.generate_button = self.dialog.add_button('_Generate', self.RESPONSE_GENERATE)
+        self.add_button = self.dialog.add_button(
+            '_Add to Image' if target else 'Open as _New Image', Gtk.ResponseType.OK)
+        self.add_button.set_sensitive(False)
+
+        vbox = Gtk.Box(orientation=Gtk.Orientation.VERTICAL, spacing=8)
+        vbox.set_border_width(12)
+        self.dialog.get_content_area().add(vbox)
+        vbox.pack_start(GimpUi.HintBox.new(
+            'Describe the picture you want: the subject, the setting, the lighting and the style. '
+            'Each click on Generate makes a new version.'), False, False, 0)
+
+        self.prompt = Gtk.TextView(wrap_mode=Gtk.WrapMode.WORD_CHAR, accepts_tab=False)
+        self.prompt.get_buffer().set_text(config.get_property('prompt') or '')
+        scroller = Gtk.ScrolledWindow(hscrollbar_policy=Gtk.PolicyType.NEVER)
+        scroller.set_shadow_type(Gtk.ShadowType.IN)
+        scroller.set_size_request(self.PREVIEW + 200, 72)
+        scroller.add(self.prompt)
+        vbox.pack_start(scroller, False, False, 0)
+
+        options = Gtk.Grid(column_spacing=12, row_spacing=6)
+        options.attach(Gtk.Label(label='Shape:', xalign=0), 0, 0, 1, 1)
+        self.shape = Gtk.ComboBoxText()
+        for shape_id, label, _, _ in SHAPES:
+            if shape_id == 'fit':
+                if target is None:
+                    continue
+                label = label.format('{} ({} × {})'.format(target[4], target[2], target[3]))
+            self.shape.append(shape_id, label)
+        if not self.shape.set_active_id(config.get_property('shape') or 'fit'):
+            self.shape.set_active(0)
+        options.attach(self.shape, 1, 0, 2, 1)
+        options.attach(Gtk.Label(label='Seed:', xalign=0), 0, 1, 1, 1)
+        self.seed = Gtk.SpinButton.new_with_range(0, 2**31 - 2, 1)
+        seed = config.get_property('seed')
+        self.seed.set_value(max(seed, 0))
+        options.attach(self.seed, 1, 1, 1, 1)
+        self.random_seed = Gtk.CheckButton.new_with_mnemonic('_Random each time')
+        self.random_seed.set_active(seed < 0)
+        self.random_seed.connect('toggled', lambda b: self.seed.set_sensitive(not b.get_active()))
+        self.seed.set_sensitive(seed >= 0)
+        options.attach(self.random_seed, 2, 1, 1, 1)
+        vbox.pack_start(options, False, False, 0)
+
+        self.preview = Gtk.Image()
+        frame = Gtk.Frame()
+        frame.set_shadow_type(Gtk.ShadowType.IN)
+        frame.set_size_request(self.PREVIEW, self.PREVIEW)
+        frame.set_halign(Gtk.Align.CENTER)
+        self.placeholder = Gtk.Label(label='Your picture will appear here.')
+        self.stack = Gtk.Stack()
+        self.stack.add_named(self.placeholder, 'empty')
+        self.stack.add_named(self.preview, 'image')
+        frame.add(self.stack)
+        vbox.pack_start(frame, True, True, 0)
+
+        self.status = Gtk.Label(xalign=0, wrap=True, selectable=True)
+        self.status.set_max_width_chars(60)
+        vbox.pack_start(self.status, False, False, 0)
+        self.dialog.show_all()
+        self.prompt.grab_focus()
+
+    def prompt_text(self):
+        buffer = self.prompt.get_buffer()
+        return buffer.get_text(buffer.get_start_iter(), buffer.get_end_iter(), False).strip()
+
+    def run(self):
+        """Returns (rgb, width, height, info, prompt, shape) for the kept picture, or None."""
+        while True:
+            response = self.dialog.run()
+            if response == self.RESPONSE_GENERATE:
+                self.start()
+                continue
+            if response == self.Gtk.ResponseType.OK and self.result is None:
+                continue
+            break
+        self.closed = True
+        self.config.set_property('prompt', self.prompt_text())
+        self.config.set_property('shape', self.shape.get_active_id() or 'fit')
+        self.config.set_property('seed', -1 if self.random_seed.get_active() else int(self.seed.get_value()))
+        self.dialog.destroy()
+        return self.result if response == self.Gtk.ResponseType.OK else None
+
+    def start(self):
+        if self.busy:
+            return
+        prompt = self.prompt_text()
+        if not prompt:
+            self.status.set_text('Type a description of the picture first.')
+            return
+        shape = self.shape.get_active_id() or 'square'
+        width, height = generation_size(shape, self.target)
+        seed = -1 if self.random_seed.get_active() else int(self.seed.get_value())
+        params = {'prompt': prompt, 'width': width, 'height': height, 'seed': seed}
+        self.busy = True
+        self.generate_button.set_sensitive(False)
+        self.add_button.set_sensitive(False)
+        self.started = time.monotonic()
+        self.tick()
+        GLib.timeout_add(500, self.tick)
+
+        def work():
+            try:
+                data, info = request('/v1/generate', params, timeout=GENERATE_TIMEOUT)
+                GLib.idle_add(self.done, (data, info, prompt, shape), None)
+            except CutoutError as e:
+                GLib.idle_add(self.done, None, str(e))
+
+        threading.Thread(target=work, daemon=True).start()
+
+    def tick(self):
+        if not self.busy or self.closed:
+            return False
+        self.status.set_text('Generating… {} s (usually 20–40 s with a graphics card)'.format(
+            int(time.monotonic() - self.started)))
+        return True
+
+    def done(self, outcome, error):
+        if self.closed:
+            return False
+        self.busy = False
+        self.generate_button.set_sensitive(True)
+        if error:
+            self.status.set_text(error)
+            self.add_button.set_sensitive(self.result is not None)
+            return False
+        data, info, prompt, shape = outcome
+        width, height = info['width'], info['height']
+        self.result = (data, width, height, info, prompt, shape)
+        pixbuf = self.GdkPixbuf.Pixbuf.new_from_bytes(
+            GLib.Bytes.new(data), self.GdkPixbuf.Colorspace.RGB, False, 8, width, height, width * 3)
+        scale = min(self.PREVIEW / width, self.PREVIEW / height)
+        self.preview.set_from_pixbuf(pixbuf.scale_simple(
+            max(1, int(width * scale)), max(1, int(height * scale)), self.GdkPixbuf.InterpType.BILINEAR))
+        self.stack.set_visible_child_name('image')
+        self.seed.set_value(info['seed'])
+        self.status.set_text('Made in {:.0f} s (seed {}). Generate again for another version, or {} '
+                             'to keep this one.'.format(info['ms'] / 1000, info['seed'],
+                                                        'Add to Image' if self.target else 'Open as New Image'))
+        self.add_button.set_sensitive(True)
+        return False
+
+
+def run_generate(procedure, run_mode, image, drawables, config, data):
+    try:
+        if image is not None and image.get_base_type() == Gimp.ImageBaseType.INDEXED:
+            raise CutoutError('Generate Image needs an RGB or grayscale image. '
+                              'Change it with Image > Mode > RGB first.')
+        target = target_area(image)
+        if run_mode == Gimp.RunMode.INTERACTIVE:
+            picked = GenerateDialog(config, target).run()
+            if picked is None:
+                return procedure.new_return_values(Gimp.PDBStatusType.CANCEL, GLib.Error())
+            rgb, width, height, info, prompt, shape = picked
+        else:
+            prompt = (config.get_property('prompt') or '').strip()
+            shape = config.get_property('shape') or 'fit'
+            width, height = generation_size(shape, target)
+            rgb, info = request_with_progress('Generating image', '/v1/generate', {
+                'prompt': prompt, 'width': width, 'height': height, 'seed': config.get_property('seed')},
+                timeout=GENERATE_TIMEOUT)
+            width, height = info['width'], info['height']
+        result = place_generated(image, drawables, rgb, width, height, prompt, shape)
+        if image is None and run_mode == Gimp.RunMode.INTERACTIVE:
+            Gimp.Display.new(result)
+    except CutoutError as e:
+        return procedure.new_return_values(Gimp.PDBStatusType.EXECUTION_ERROR, GLib.Error(str(e)))
+    Gimp.displays_flush()
+    return procedure.new_return_values(Gimp.PDBStatusType.SUCCESS, GLib.Error())
+
+
 RUNNERS = {
     PROC_REMOVE: remove_background,
     PROC_SUBJECT: select_subject,
@@ -573,6 +859,10 @@ def run(procedure, run_mode, image, drawables, config, data):
 GUIDE = """<span size="large"><b>AI Cutout</b></span>
 Everything is in the <b>AI</b> menu at the top of the image window.
 
+<b>Generate Image...</b>
+Describe a picture and the AI paints it. It's added as a new layer that fills your selection
+or the whole canvas. With no image open, it opens as a new image.
+
 <b>Remove Background...</b>
 Cuts the main subject out of the current layer. Nothing is deleted: the background
 is hidden with a layer mask. Paint the mask white to bring parts back, black to hide more.
@@ -592,7 +882,7 @@ The same, for a layer mask you painted roughly.
 
 <b>Tips</b>
   - Ctrl+Z undoes any of these in one step.
-  - Press / anywhere in GIMP and type "background" or "subject" to find these commands.
+  - Press / anywhere in GIMP and type "generate", "background" or "subject" to find these commands.
   - The first use after starting your computer takes a few seconds while the AI wakes up."""
 
 
@@ -673,7 +963,7 @@ class AICutout(Gimp.PlugIn):
         return False
 
     def do_query_procedures(self):
-        return list(RUNNERS) + [PROC_GUIDE]
+        return list(RUNNERS) + [PROC_GENERATE, PROC_GUIDE]
 
     def do_create_procedure(self, name):
         if name == PROC_GUIDE:
@@ -686,6 +976,29 @@ class AICutout(Gimp.PlugIn):
             procedure.set_documentation('How to use AI Cutout, and whether its AI engine is running',
                                         '', name)
             procedure.set_attribution('AI Cutout', 'AI Cutout', '2026')
+            return procedure
+
+        if name == PROC_GENERATE:
+            procedure = Gimp.ImageProcedure.new(self, name, Gimp.PDBProcType.PLUGIN, run_generate, None)
+            procedure.set_image_types('*')
+            procedure.set_sensitivity_mask(Gimp.ProcedureSensitivityMask.ALWAYS |
+                                           Gimp.ProcedureSensitivityMask.NO_IMAGE)
+            procedure.set_menu_label('Generate Image...')
+            procedure.add_menu_path(AI_MENU)
+            procedure.add_menu_path('<Image>/File/Create')
+            procedure.set_documentation(
+                'Paint a new picture from a description',
+                'Generates an image with Z-Image-Turbo and adds it as a layer filling the selection '
+                'or canvas, or as a new image when none is open.', name)
+            procedure.set_attribution('AI Cutout', 'AI Cutout (Z-Image-Turbo)', '2026')
+            procedure.add_string_argument('prompt', '_Description', 'What the picture should show',
+                                          '', RW)
+            shapes = Gimp.Choice.new()
+            for index, (shape_id, label, _, _) in enumerate(SHAPES):
+                shapes.add(shape_id, index, label.format('selection or canvas'), '')
+            procedure.add_choice_argument('shape', '_Shape', 'Picture shape', shapes, 'fit', RW)
+            procedure.add_int_argument('seed', 'S_eed', 'Seed for the random noise; -1 picks one at random',
+                                       -1, 2**31 - 2, -1, RW)
             return procedure
 
         label, also_in, blurb, help_text = COMMANDS[name]

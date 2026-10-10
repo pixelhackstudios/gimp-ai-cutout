@@ -4,7 +4,7 @@ Binary protocol, kept dependency-free on the GIMP side (the plug-in only has the
 Python standard library). Parameters travel as JSON in the `X-Cutout` header;
 pixels are raw, row-major, little-endian:
 
-  GET  /health                -> {"status", "device", "loaded", "version"}
+  GET  /health                -> {"status", "device", "loaded", "version", "generation"}
   POST /v1/matte              X-Cutout {width, height, depth: "u8"|"u16", matting,
                               band, foreground, refine}; body = RGBA pixels, then a
                               u16 mask when refine is true.
@@ -16,6 +16,8 @@ pixels are raw, row-major, little-endian:
   POST /v1/sam/apply          X-Cutout {session, points, labels, box, matting, band}
                               -> u16 alpha at full size
   POST /v1/sam/close          X-Cutout {session}
+  POST /v1/generate           X-Cutout {prompt, width, height, seed (-1 = random)}
+                              -> u8 RGB; X-Cutout-Info {seed, ms, width, height}
 
 Under systemd socket activation the listening socket arrives as fd 3; the
 process exits after --idle-timeout seconds without requests (freeing GPU memory)
@@ -36,6 +38,7 @@ from http.server import BaseHTTPRequestHandler, HTTPServer
 import numpy as np
 
 from . import DEFAULT_PORT, __version__
+from . import generate
 from .pipeline import Pipeline
 
 log = logging.getLogger("ai-cutout")
@@ -89,7 +92,7 @@ class Handler(BaseHTTPRequestHandler):
         if self.path == "/health":
             pipe = self.server.pipeline
             self._json(200, {"status": "ok", "version": __version__, "device": str(pipe.device),
-                             "loaded": pipe.models.loaded()})
+                             "loaded": pipe.models.loaded(), "generation": generate.status()})
         else:
             self._json(404, {"error": f"unknown path {self.path}"})
 
@@ -97,7 +100,7 @@ class Handler(BaseHTTPRequestHandler):
         self.server.touch()
         routes = {"/v1/matte": self.matte, "/v1/sam/session": self.sam_session,
                   "/v1/sam/predict": self.sam_predict, "/v1/sam/apply": self.sam_apply,
-                  "/v1/sam/close": self.sam_close}
+                  "/v1/sam/close": self.sam_close, "/v1/generate": self.generate_image}
         route = routes.get(self.path)
         try:
             length = int(self.headers.get("Content-Length", 0))
@@ -173,6 +176,15 @@ class Handler(BaseHTTPRequestHandler):
     def sam_close(self, params, body):
         self.server.pipeline.sam_close(params.get("session", ""))
         self._json(200, {"status": "closed"})
+
+    def generate_image(self, params, body):
+        self.server.pipeline.release_gpu_cache()
+        try:
+            rgb, info = generate.generate(params.get("prompt", ""), params.get("width", 1024),
+                                          params.get("height", 1024), params.get("seed", -1))
+        except generate.GenerationError as e:
+            raise ClientError(str(e))
+        self._reply(200, rgb.tobytes(), info=info)
 
 
 class CutoutServer(HTTPServer):

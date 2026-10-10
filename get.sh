@@ -25,7 +25,7 @@ main() {
     fi
     rm -rf "$src"
     mv "$src.new" "$src"
-    exec bash "$src/install.sh" </dev/null
+    exec bash "$src/install.sh" "$@" </dev/null
 }
 
 main "$@"

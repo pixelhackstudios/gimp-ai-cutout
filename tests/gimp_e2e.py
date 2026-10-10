@@ -36,7 +36,7 @@ def call(name, image, layer, **props):
     cfg = proc.create_config()
     cfg.set_property('run-mode', Gimp.RunMode.NONINTERACTIVE)
     cfg.set_property('image', image)
-    cfg.set_core_object_array('drawables', [layer])
+    cfg.set_core_object_array('drawables', [layer] if layer else [])
     for k, v in props.items():
         cfg.set_property(k.replace('_', '-'), v)
     res = proc.run(cfg)
@@ -185,6 +185,42 @@ try:
         o, c, s = gray_stats(layer.get_mask(), w - w // 8, 0, w // 8, h)
         check(o == 0, 'mask is empty far outside the selection')
     img.delete()
+
+    # 9. Generate Image (Z-Image-Turbo through the server)
+    prompt = 'a red apple on a wooden table, soft daylight, photo'
+    img, layer = load()
+    img.select_rectangle(Gimp.ChannelOps.REPLACE, 40, 30, 300, 200)
+    status, err = call('python-fu-ai-cutout-generate', img, layer, prompt=prompt, seed=3)
+    layers = img.get_layers()
+    check(status == Gimp.PDBStatusType.SUCCESS and len(layers) == 2, f'generate into a selection ({err})')
+    if len(layers) == 2:
+        gen = layers[0]
+        check((gen.get_width(), gen.get_height()) == (300, 200) and tuple(gen.get_offsets()[1:]) == (40, 30),
+              f'generated layer fills the selection: {gen.get_width()}x{gen.get_height()} at {gen.get_offsets()[1:]}')
+        check(gen.get_name().startswith('AI: a red apple'), f'generated layer is named after the prompt: {gen.get_name()!r}')
+        px = gen.get_buffer().get(Gegl.Rectangle.new(0, 0, 300, 200), 1.0, "R'G'B'A u8", Gegl.AbyssPolicy.NONE)
+        check(max(px) - min(px) > 100, 'generated layer has real picture content')
+    export(img, '9_generate_selection.png')
+    img.delete()
+
+    img, layer = load()
+    status, err = call('python-fu-ai-cutout-generate', img, layer, prompt=prompt, shape='square', seed=3)
+    gen = img.get_layers()[0]
+    check(status == Gimp.PDBStatusType.SUCCESS and (gen.get_width(), gen.get_height()) == (1024, 1024)
+          and tuple(gen.get_offsets()[1:]) == ((w - 1024) // 2, (h - 1024) // 2),
+          f'square generation is centred at full size ({err})')
+    status, err = call('python-fu-ai-cutout-generate', img, layer, prompt='   ')
+    check(status == Gimp.PDBStatusType.EXECUTION_ERROR and 'Describe' in str(err), f'empty prompt errors: {err}')
+    img.delete()
+
+    before = {i.get_id() for i in Gimp.get_images()}
+    status, err = call('python-fu-ai-cutout-generate', None, None, prompt=prompt, seed=3)
+    created = [i for i in Gimp.get_images() if i.get_id() not in before]
+    check(status == Gimp.PDBStatusType.SUCCESS and len(created) == 1, f'generate with no image open makes a new image ({err})')
+    if len(created) == 1:
+        new = created[0]
+        check((new.get_width(), new.get_height()) == (1024, 1024), f'new image is 1024x1024: {new.get_width()}x{new.get_height()}')
+        export(new, '9_generate_new_image.png')
 except Exception:
     failures += 1
     log(traceback.format_exc())

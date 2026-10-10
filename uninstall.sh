@@ -1,6 +1,6 @@
 #!/usr/bin/env bash
 # Remove AI Cutout for GIMP: the plug-in, its saved settings, the background
-# service, the AI engine and the AI models. Close GIMP first.
+# service, the AI engine, the image generator and the AI models. Close GIMP first.
 set -uo pipefail
 
 APP="${XDG_DATA_HOME:-$HOME/.local/share}/gimp-ai-cutout"
@@ -21,7 +21,10 @@ done
 
 rm -rf "$HUB/models--ZhengPeng7--BiRefNet" \
        "$HUB/models--hustvl--vitmatte-base-composition-1k" \
-       "$HUB/models--facebook--sam2.1-hiera-large"
+       "$HUB/models--facebook--sam2.1-hiera-large" \
+       "$HUB/models--leejet--Z-Image-Turbo-GGUF" \
+       "$HUB/models--unsloth--Qwen3-4B-Instruct-2507-GGUF" \
+       "$HUB/models--Comfy-Org--z_image_turbo"
 rm -rf "$APP"
 
 printf '\n\033[1mAI Cutout has been removed.\033[0m Restart GIMP to clear the AI menu.\n\n'
