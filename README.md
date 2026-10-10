@@ -1,114 +1,102 @@
 # AI Cutout for GIMP
 
-Remove backgrounds, select things with one click, and make new pictures from a
-description, all inside GIMP. The AI runs on your own computer: your pictures and
-descriptions are never uploaded anywhere.
+Adds an **AI** menu to GIMP. Remove backgrounds, select things with a click, and make
+new pictures just by describing them.
+
+Everything runs on your own computer. Nothing is uploaded.
 
 ![A photo with its background removed in GIMP](docs/images/3-result.jpg)
 
 ## What you need
 
 - **A Linux computer** (Ubuntu, Linux Mint, Fedora, Pop!_OS…). Windows and Mac aren't supported yet.
-- **GIMP 3.** Open it at least once before you install.
-- **About 16 GB of free disk space** and an internet connection for the one-time download.
-- **A graphics card** is strongly recommended:
-  - Background removal is fastest with an NVIDIA card. Without one it still works, just slower (several seconds per picture).
-  - Making pictures needs a graphics card with at least 6 GB of memory and takes about 20–30 seconds per picture. It's tested on NVIDIA; AMD and Intel cards should work too. Without a graphics card each picture takes several minutes.
+- **GIMP 3.** Open it once before you install.
+- **About 16 GB of free disk space.**
+- **A graphics card** makes everything much faster (NVIDIA works best). Without one, removing a background takes a few seconds and making a picture takes several minutes.
 
 ## Install
 
-You do this once. It takes about 15–30 minutes, mostly downloading.
+You only do this once. It takes 15–30 minutes, mostly downloading.
 
 1. **Close GIMP.**
-2. **Open a Terminal:** press **Ctrl + Alt + T**.
-3. **Copy this line**, paste it into the Terminal with **Ctrl + Shift + V**, and press **Enter**:
+2. Press **Ctrl + Alt + T** to open a Terminal.
+3. Copy this line, paste it into the Terminal with **Ctrl + Shift + V**, and press **Enter**:
 
    ```bash
    wget -qO- https://raw.githubusercontent.com/pixelhackstudios/gimp-ai-cutout/main/get.sh | bash
    ```
 
-4. **Wait until it says "Done!"** You can leave it running in the background.
-5. **Open GIMP.** There's now an **AI** menu at the top.
+4. **Wait until it says "Done!"**, then open GIMP. You'll see a new **AI** menu at the top.
 
-Only want background removal? Use this line instead. It skips picture-making and needs about 9 GB:
+## Make a picture
 
-```bash
-wget -qO- https://raw.githubusercontent.com/pixelhackstudios/gimp-ai-cutout/main/get.sh | bash -s -- --no-generate
-```
-
-## Use it
-
-Open a picture, then click **AI** in the menu bar at the top of the window.
-
-![The AI menu in GIMP](docs/images/1-ai-menu.jpg)
-
-| Menu item | What it does |
-|---|---|
-| **Generate Image…** | Makes a new picture from a description. See below. |
-| **Remove Background…** | Cuts out the main subject. Click the **Remove Background** button in the box that pops up. |
-| **Select Subject** | Selects the main subject, so you can copy it, move it or edit it on its own. |
-| **Select Object by Clicking…** | Shows your picture. Click the thing you want (a person, a cup, a car). Right-click anything that shouldn't be included, then click **Select**. |
-| **Refine Selection Edges…** | For hair and fur. Draw a rough selection around it with any selection tool, then run this to get the fine strands. |
-| **Refine Layer Mask Edges…** | The same, for a layer mask you painted roughly. |
-| **How to Use AI Cutout…** | A short guide inside GIMP. It also tells you whether the AI is working. |
-
-![The Remove Background box](docs/images/2-remove-background-dialog.jpg)
-
-### Make a picture from a description
-
-1. Click **AI ▸ Generate Image…** (also under **File ▸ Create**). You don't need a picture open.
-2. Describe what you want: the subject, the setting, the lighting and the style. For example: *"a red fox standing in fresh snow, soft morning light, photo"*.
-3. Click **Generate**. After about 20–30 seconds the picture appears in the box. Not quite right? Click **Generate** again for a new version, or change the description.
-4. Click **Add to Image** to keep it. It's added as a new layer that fills your selection, or the whole picture if nothing is selected. With no picture open, it opens as a new image.
+1. Click **AI ▸ Generate Image…**
+2. Type what you want to see. For example: *a red fox standing in snow, soft morning light, photo*
+3. Click **Generate** and wait about half a minute. Don't like it? Click **Generate** again.
+4. Click **Add to Image**.
 
 ![The Generate Image box](docs/images/4-generate-dialog.jpg)
 
-**Shape** picks the picture's shape: *Fit* matches your selection or canvas, or choose square, portrait, landscape or widescreen.
-**Random each time** gives a different picture on every click. Untick it to repeat a picture exactly (handy when you only want to tweak the description).
+The picture fills your selection, or the whole picture if nothing is selected. If no
+picture is open, it opens as a new one.
 
-### Good to know
+**Tip:** the more you describe (the place, the light, the style), the better the result.
 
-- **Ctrl + Z** undoes any of these.
-- **Save as PNG to keep the transparent background.** Use **File ▸ Export As…** and give the name an ending of `.png`. JPG files can't be transparent.
-- **The first use after you start your computer takes a few seconds** while the AI wakes up. After that it's quick.
-- **Nothing is deleted.** Remove Background hides the background with a *layer mask*. To fix a mistake, click the black-and-white picture next to your layer in the Layers panel, then paint with **white** to bring parts back or **black** to hide more.
-- **Hair looks chunky?** Undo, run Remove Background again and set **Edge width** to a bigger number, like 40.
+## Remove a background
+
+1. Open a picture.
+2. Click **AI ▸ Remove Background…**
+3. Click the **Remove Background** button.
+
+![The AI menu in GIMP](docs/images/1-ai-menu.jpg)
+
+To keep the see-through background, save with **File ▸ Export As…** and a name ending
+in **.png**. JPG files can't be see-through.
+
+## Everything in the AI menu
+
+| Menu item | What it does |
+|---|---|
+| **Generate Image…** | Makes a new picture from your description. |
+| **Remove Background…** | Cuts out the main subject. |
+| **Select Subject** | Selects the main subject in one click. |
+| **Select Object by Clicking…** | Click the thing you want selected. Right-click anything to leave out. |
+| **Refine Selection Edges…** | For hair and fur: draw a rough selection, and this finds the fine edges. |
+| **Refine Layer Mask Edges…** | The same, for a layer mask. |
+| **How to Use AI Cutout…** | A short guide, plus a check that everything is working. |
+
+## Tips
+
+- **Ctrl + Z** undoes anything.
+- **Nothing is deleted** when you remove a background. To fix a mistake, click the black-and-white picture next to your layer in the Layers panel, then paint with **white** to bring parts back or **black** to hide more.
+- **Hair looks blocky?** Undo, run Remove Background again and set **Edge width** to about 40.
 - **Coloured fringe around the edges?** Tick **Decontaminate colors** in the Remove Background box.
-- **Glass and see-through objects** come out solid. That's a known limitation.
+- **Glass and see-through objects** come out solid.
+- **The first use after you turn on your computer** takes a few extra seconds.
 
-## Something's not right?
+## Problems?
 
 | Problem | What to do |
 |---|---|
-| There's no **AI** menu | Close GIMP completely and open it again. If it's still missing, run the install line again. |
-| "AI Cutout's engine isn't running" | Run the install line again. It's safe to run as many times as you like, and it repairs things. |
+| There's no **AI** menu | Close GIMP completely and open it again. Still missing? Run the install line again. |
+| "AI Cutout's engine isn't running" | Run the install line again. It's safe and fixes most problems. |
 | `wget: command not found` | Use this line instead: `curl -fsSL https://raw.githubusercontent.com/pixelhackstudios/gimp-ai-cutout/main/get.sh \| bash` |
-| Background removal is slow every time | Normal without an NVIDIA graphics card. |
-| Generate Image takes minutes | Your computer has no graphics card it can use for this. AI ▸ How to Use AI Cutout… shows what it found. |
-| Still stuck | [Open an issue](https://github.com/pixelhackstudios/gimp-ai-cutout/issues) and say what you clicked and what message you saw. |
+| Not enough disk space | Install only the background tools (about 9 GB): `wget -qO- https://raw.githubusercontent.com/pixelhackstudios/gimp-ai-cutout/main/get.sh \| bash -s -- --no-generate` |
+| Making a picture takes minutes | Your computer has no graphics card the AI can use. |
+| Something else | [Open an issue](https://github.com/pixelhackstudios/gimp-ai-cutout/issues) and say what you clicked and what you saw. |
 
-## Update
+## Update or uninstall
 
-Run the install line again. It always fetches the newest version.
+- **Update:** run the install line again.
+- **Uninstall:** paste this into a Terminal and press Enter:
 
-## Uninstall
-
-Paste this into a Terminal and press Enter. It removes the plugin, the AI engine, the picture maker and the AI models.
-
-```bash
-bash ~/.local/share/gimp-ai-cutout/src/uninstall.sh
-```
-
-## For developers
-
-How it works, the command-line tool, tests and model details are in
-[docs/TECHNICAL.md](docs/TECHNICAL.md).
+  ```bash
+  bash ~/.local/share/gimp-ai-cutout/src/uninstall.sh
+  ```
 
 ## License
 
-The code is under the [MIT License](LICENSE). Pictures are made with
-[stable-diffusion.cpp](https://github.com/leejet/stable-diffusion.cpp) (MIT) and the
-Z-Image-Turbo model (Apache-2.0). The background-removal models have their own licenses:
-BiRefNet (MIT), SAM 2.1 (Apache-2.0) and ViTMatte (Apache-2.0, but trained on a dataset
-that is licensed for non-commercial research only). If you plan to use AI Cutout
-commercially, check the ViTMatte terms first.
+The code is free to use under the [MIT License](LICENSE). The AI models have their own
+licenses. One of them (ViTMatte, used for hair and soft edges) was trained on data
+licensed for non-commercial use only, so check before using AI Cutout for paid work.
+Details, and notes for developers, are in [docs/TECHNICAL.md](docs/TECHNICAL.md).
